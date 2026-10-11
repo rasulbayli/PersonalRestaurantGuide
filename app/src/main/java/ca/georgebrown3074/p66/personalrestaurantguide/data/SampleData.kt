@@ -1,9 +1,6 @@
 package ca.georgebrown3074.p66.personalrestaurantguide.data
+// Alikhan Zhilkibayev: restaurant search and sample data.
 
-/**
- * Temporary in-memory store so every screen can share one list.
- * TODO Milestone 3: replace with RestaurantRepository + Room.
- */
 object SampleData {
 
     val defaultTags = listOf(
