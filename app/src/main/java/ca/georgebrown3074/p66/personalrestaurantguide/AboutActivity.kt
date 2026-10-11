@@ -1,5 +1,7 @@
 package ca.georgebrown3074.p66.personalrestaurantguide
 
+// Kerem Bas: list, splash, and about screens. 
+
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
