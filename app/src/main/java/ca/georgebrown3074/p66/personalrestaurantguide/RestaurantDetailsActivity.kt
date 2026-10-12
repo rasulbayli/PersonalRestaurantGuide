@@ -1,4 +1,5 @@
 package ca.georgebrown3074.p66.personalrestaurantguide
+// Pintoo Himani: details, map, and share.
 
 import android.content.Intent
 import android.os.Bundle
