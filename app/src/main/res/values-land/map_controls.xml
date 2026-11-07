@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The map is short in landscape, so the buttons sit in a row to stay fully visible. -->
+    <style name="Widget.PRG.MapControls" parent="">
+        <item name="android:orientation">horizontal</item>
+    </style>
+</resources>

@@ -1,5 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.ksp)
+}
+
+// The Google Maps key lives in local.properties, which git ignores, so it never reaches GitHub.
+val mapsApiKey: String = Properties().run {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+    getProperty("MAPS_API_KEY", "").trim()
 }
 
 android {
@@ -16,6 +26,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
+        buildConfigField("boolean", "MAPS_CONFIGURED", mapsApiKey.isNotEmpty().toString())
     }
 
     buildTypes {
@@ -24,6 +37,9 @@ android {
                 enable = false
             }
         }
+    }
+    buildFeatures {
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -38,7 +54,12 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.recyclerview)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
     implementation(libs.material)
+    implementation(libs.play.services.location)
+    implementation(libs.play.services.maps)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

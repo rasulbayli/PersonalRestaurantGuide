@@ -96,18 +96,22 @@
                 android:layout_marginTop="@dimen/spacing_md"
                 android:textAppearance="@style/TextAppearance.PRG.Body" />
 
-            <!-- TODO Milestone 3: SupportMapFragment replaces this placeholder. -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/mapPreviewCard"
                 style="@style/Widget.PRG.Card"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/map_preview_height"
                 android:layout_marginTop="@dimen/spacing_md"
-                android:clickable="true"
-                android:focusable="true"
                 app:contentPadding="0dp">
 
+                <FrameLayout
+                    android:id="@+id/mapPreviewContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone" />
+
                 <LinearLayout
+                    android:id="@+id/mapPreviewEmpty"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:background="@color/map_placeholder"
@@ -122,12 +126,25 @@
                         android:tint="@color/text_secondary" />
 
                     <TextView
+                        android:id="@+id/txtMapPreviewEmpty"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/spacing_sm"
-                        android:text="@string/map_preview"
+                        android:gravity="center"
+                        android:paddingStart="@dimen/spacing_md"
+                        android:paddingEnd="@dimen/spacing_md"
                         android:textAppearance="@style/TextAppearance.PRG.Caption" />
                 </LinearLayout>
+
+                <!-- Sits above the map so a tap opens the full map. -->
+                <View
+                    android:id="@+id/mapPreviewTouch"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:contentDescription="@string/map"
+                    android:focusable="true" />
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.button.MaterialButton

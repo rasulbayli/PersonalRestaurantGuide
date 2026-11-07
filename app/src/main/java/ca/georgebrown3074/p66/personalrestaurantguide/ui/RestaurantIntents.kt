@@ -10,7 +10,7 @@ import ca.georgebrown3074.p66.personalrestaurantguide.data.Restaurant
 
 /**
  * Directions and share used by the details screen and the full-screen map.
- * Milestone 3 can swap the map link for the Maps SDK without changing the buttons.
+ * Google Maps uses the device's current location as the start of the route.
  */
 object RestaurantIntents {
 

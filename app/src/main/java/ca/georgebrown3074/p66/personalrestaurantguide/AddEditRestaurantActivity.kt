@@ -10,7 +10,12 @@ import android.widget.RatingBar
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import ca.georgebrown3074.p66.personalrestaurantguide.data.AddressLookup
+import ca.georgebrown3074.p66.personalrestaurantguide.data.AppDatabase
+import ca.georgebrown3074.p66.personalrestaurantguide.data.LookupResult
 import ca.georgebrown3074.p66.personalrestaurantguide.data.Restaurant
+import ca.georgebrown3074.p66.personalrestaurantguide.data.RestaurantDao
 import ca.georgebrown3074.p66.personalrestaurantguide.data.SampleData
 import ca.georgebrown3074.p66.personalrestaurantguide.ui.applySystemBarInsets
 import com.google.android.material.appbar.MaterialToolbar
@@ -21,12 +26,20 @@ import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 class AddEditRestaurantActivity : AppCompatActivity() {
 
     private var editingId: Long? = null
     private val tagsAddedThisSession = mutableListOf<String>()
+    private var knownRestaurants: List<Restaurant> = emptyList()
 
+    // The address text that these coordinates belong to. Editing the text invalidates them.
+    private var locatedAddress: String? = null
+    private var locatedLatitude: Double? = null
+    private var locatedLongitude: Double? = null
+
+    private lateinit var dao: RestaurantDao
     private lateinit var nameLayout: TextInputLayout
     private lateinit var nameEdit: TextInputEditText
     private lateinit var addressLayout: TextInputLayout
@@ -37,24 +50,31 @@ class AddEditRestaurantActivity : AppCompatActivity() {
     private lateinit var phoneContainer: LinearLayout
     private lateinit var tagChipGroup: ChipGroup
     private lateinit var ratingBar: RatingBar
+    private lateinit var verifyButton: MaterialButton
+    private lateinit var saveButton: MaterialButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val existing = restaurantFromIntent()
-        if (intent.hasExtra(Restaurant.EXTRA_RESTAURANT_ID) && existing == null) {
+        val requestedId = if (intent.hasExtra(Restaurant.EXTRA_RESTAURANT_ID)) {
+            intent.getLongExtra(Restaurant.EXTRA_RESTAURANT_ID, -1L)
+        } else {
+            null
+        }
+        if (requestedId != null && requestedId < 0L) {
             finish()
             return
         }
-        editingId = existing?.id
+        editingId = requestedId
+        dao = AppDatabase.get(this).restaurantDao()
 
         setContentView(R.layout.activity_add_edit_restaurant)
         findViewById<View>(R.id.addEditRoot).applySystemBarInsets()
 
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.title = getString(
-            if (existing == null) R.string.add_restaurant else R.string.edit_restaurant
+            if (requestedId == null) R.string.add_restaurant else R.string.edit_restaurant
         )
         toolbar.setNavigationOnClickListener { finish() }
 
@@ -68,31 +88,44 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         phoneContainer = findViewById(R.id.phoneContainer)
         tagChipGroup = findViewById(R.id.tagChipGroup)
         ratingBar = findViewById(R.id.ratingBar)
+        verifyButton = findViewById(R.id.btnVerify)
+        saveButton = findViewById(R.id.btnSave)
 
         // Dynamic rows are restored by us, not by the view hierarchy (ids would collide).
         phoneContainer.setSaveFromParentEnabled(false)
         tagChipGroup.setSaveFromParentEnabled(false)
 
-        if (savedInstanceState == null) {
-            if (existing != null) {
-                fillFrom(existing)
-            } else {
-                addPhoneField("")
-                showTagChips(emptySet())
-            }
-        } else {
-            restoreDynamicFields(savedInstanceState)
-        }
-
-        findViewById<MaterialButton>(R.id.btnVerify).setOnClickListener { verifyAddress() }
+        verifyButton.setOnClickListener { verifyAddress() }
         findViewById<MaterialButton>(R.id.btnAddPhone).setOnClickListener { addPhoneField("") }
         findViewById<MaterialButton>(R.id.btnAddTag).setOnClickListener { addNewTag() }
-        findViewById<MaterialButton>(R.id.btnSave).setOnClickListener { save() }
+        saveButton.setOnClickListener { save() }
         findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { finish() }
 
         nameEdit.clearErrorOnType(nameLayout)
         addressEdit.clearErrorOnType(addressLayout)
         newTagEdit.clearErrorOnType(newTagLayout)
+
+        // Saving stays off until the stored data has been loaded into the form.
+        saveButton.isEnabled = false
+        lifecycleScope.launch { loadForm(requestedId, savedInstanceState) }
+    }
+
+    private suspend fun loadForm(requestedId: Long?, savedState: Bundle?) {
+        knownRestaurants = dao.getAll()
+        val existing = requestedId?.let { dao.getById(it) }
+        if (requestedId != null && existing == null) {
+            finish()
+            return
+        }
+        if (savedState != null) {
+            restoreDynamicFields(savedState)
+        } else if (existing != null) {
+            fillFrom(existing)
+        } else {
+            addPhoneField("")
+            showTagChips(emptySet())
+        }
+        saveButton.isEnabled = true
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -100,13 +133,13 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         outState.putStringArrayList(STATE_PHONES, phoneFieldTexts())
         outState.putStringArrayList(STATE_CHECKED_TAGS, ArrayList(selectedTags()))
         outState.putStringArrayList(STATE_NEW_TAGS, ArrayList(tagsAddedThisSession))
-    }
-
-    private fun restaurantFromIntent(): Restaurant? {
-        if (!intent.hasExtra(Restaurant.EXTRA_RESTAURANT_ID)) return null
-        val id = intent.getLongExtra(Restaurant.EXTRA_RESTAURANT_ID, -1L)
-        if (id < 0L) return null
-        return SampleData.getById(id)
+        val latitude = locatedLatitude
+        val longitude = locatedLongitude
+        if (latitude != null && longitude != null) {
+            outState.putString(STATE_LOCATED_ADDRESS, locatedAddress)
+            outState.putDouble(STATE_LATITUDE, latitude)
+            outState.putDouble(STATE_LONGITUDE, longitude)
+        }
     }
 
     private fun fillFrom(restaurant: Restaurant) {
@@ -114,20 +147,36 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         addressEdit.setText(restaurant.address)
         descriptionEdit.setText(restaurant.description)
         ratingBar.rating = restaurant.rating.coerceIn(0f, 5f)
+        val latitude = restaurant.latitude
+        val longitude = restaurant.longitude
+        if (latitude != null && longitude != null) {
+            rememberLocation(restaurant.address, latitude, longitude)
+        }
         val phones = restaurant.phones
         if (phones.isEmpty()) addPhoneField("") else phones.forEach { addPhoneField(it) }
         showTagChips(restaurant.tags.toSet())
     }
 
     private fun restoreDynamicFields(state: Bundle) {
-        state.getStringArrayList(STATE_NEW_TAGS)?.forEach { tag ->
-            SampleData.registerTag(tag)
-            tagsAddedThisSession.add(tag)
-        }
+        state.getStringArrayList(STATE_NEW_TAGS)?.let { tagsAddedThisSession.addAll(it) }
         val phones = state.getStringArrayList(STATE_PHONES)
         if (phones.isNullOrEmpty()) addPhoneField("") else phones.forEach { addPhoneField(it) }
         val checked = state.getStringArrayList(STATE_CHECKED_TAGS)?.toSet().orEmpty()
         showTagChips(checked)
+        val located = state.getString(STATE_LOCATED_ADDRESS)
+        if (located != null) {
+            rememberLocation(
+                located,
+                state.getDouble(STATE_LATITUDE),
+                state.getDouble(STATE_LONGITUDE)
+            )
+        }
+    }
+
+    private fun rememberLocation(address: String, latitude: Double, longitude: Double) {
+        locatedAddress = address
+        locatedLatitude = latitude
+        locatedLongitude = longitude
     }
 
     @Suppress("DEPRECATION") // Course spec: format as the user types. Country CA matches Toronto.
@@ -160,7 +209,7 @@ class AddEditRestaurantActivity : AppCompatActivity() {
 
     private fun showTagChips(selected: Set<String>) {
         tagChipGroup.removeAllViews()
-        SampleData.allTags().forEach { tag ->
+        SampleData.allTags(knownRestaurants, tagsAddedThisSession + selected).forEach { tag ->
             val checked = selected.any { it.equals(tag, ignoreCase = true) }
             addTagChip(tag, checked)
         }
@@ -205,7 +254,6 @@ class AddEditRestaurantActivity : AppCompatActivity() {
             return
         }
         newTagLayout.error = null
-        SampleData.registerTag(raw)
         if (tagsAddedThisSession.none { it.equals(raw, ignoreCase = true) }) {
             tagsAddedThisSession.add(raw)
         }
@@ -219,31 +267,29 @@ class AddEditRestaurantActivity : AppCompatActivity() {
     }
 
     private fun verifyAddress() {
-        val tidy = capitaliseWords(addressEdit.text?.toString().orEmpty())
-        addressEdit.setText(tidy)
-        addressEdit.setSelection(tidy.length)
+        val address = addressEdit.text?.toString()?.trim().orEmpty()
+        if (address.isEmpty()) {
+            addressLayout.error = getString(R.string.error_address_required)
+            return
+        }
         hideKeyboard()
-        // TODO Milestone 3: Geocoder
-        Snackbar.make(
-            findViewById(R.id.addEditRoot),
-            R.string.address_verify_later,
-            Snackbar.LENGTH_LONG
-        ).show()
-    }
-
-    private fun capitaliseWords(raw: String): String {
-        return raw.trim()
-            .split(Regex("\\s+"))
-            .filter { it.isNotEmpty() }
-            .joinToString(" ") { word ->
-                word.lowercase(Locale.getDefault()).replaceFirstChar { character ->
-                    if (character.isLowerCase()) {
-                        character.titlecase(Locale.getDefault())
-                    } else {
-                        character.toString()
-                    }
+        verifyButton.isEnabled = false
+        lifecycleScope.launch {
+            when (val result = AddressLookup.find(this@AddEditRestaurantActivity, address)) {
+                is LookupResult.Found -> {
+                    val formatted = result.address.ifBlank { address }
+                    addressEdit.setText(formatted)
+                    addressEdit.setSelection(formatted.length)
+                    rememberLocation(formatted, result.latitude, result.longitude)
+                    showMessage(R.string.address_verified)
                 }
+                LookupResult.NotFound -> {
+                    addressLayout.error = getString(R.string.address_not_found)
+                }
+                LookupResult.Unavailable -> showMessage(R.string.address_lookup_unavailable)
             }
+            verifyButton.isEnabled = true
+        }
     }
 
     private fun save() {
@@ -269,38 +315,44 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         val rating = ratingBar.rating.coerceIn(0f, 5f)
         val id = editingId
 
-        if (id == null) {
-            // Latitude and longitude stay empty until Geocoder runs in Milestone 3.
-            SampleData.add(
-                Restaurant(
-                    id = 0,
-                    name = name,
-                    address = address,
-                    latitude = null,
-                    longitude = null,
-                    phones = phones,
-                    description = description,
-                    tags = tags,
-                    rating = rating
-                )
-            )
-        } else {
-            val existing = SampleData.getById(id)
-            if (existing == null) {
-                finish()
-                return
+        hideKeyboard()
+        saveButton.isEnabled = false
+        lifecycleScope.launch {
+            // Saving never depends on the network: an address that can't be located yet is
+            // stored without coordinates, and the details screen tries again later.
+            if (address != locatedAddress) {
+                locatedAddress = null
+                locatedLatitude = null
+                locatedLongitude = null
+                val result = AddressLookup.find(this@AddEditRestaurantActivity, address)
+                if (result is LookupResult.Found) {
+                    rememberLocation(address, result.latitude, result.longitude)
+                }
             }
-            existing.name = name
-            existing.address = address
-            existing.phones = phones
-            existing.description = description
-            existing.tags = tags
-            existing.rating = rating
-            SampleData.update(existing)
-        }
+            val restaurant = Restaurant(
+                id = id ?: 0L,
+                name = name,
+                address = address,
+                latitude = locatedLatitude,
+                longitude = locatedLongitude,
+                phones = phones,
+                description = description,
+                tags = tags,
+                rating = rating
+            )
+            if (id == null) dao.insert(restaurant) else dao.update(restaurant)
 
-        Toast.makeText(this, R.string.restaurant_saved, Toast.LENGTH_SHORT).show()
-        finish()
+            Toast.makeText(
+                this@AddEditRestaurantActivity,
+                R.string.restaurant_saved,
+                Toast.LENGTH_SHORT
+            ).show()
+            finish()
+        }
+    }
+
+    private fun showMessage(message: Int) {
+        Snackbar.make(findViewById(R.id.addEditRoot), message, Snackbar.LENGTH_LONG).show()
     }
 
     private fun hideKeyboard() {
@@ -323,5 +375,8 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         private const val STATE_PHONES = "state_phones"
         private const val STATE_CHECKED_TAGS = "state_checked_tags"
         private const val STATE_NEW_TAGS = "state_new_tags"
+        private const val STATE_LOCATED_ADDRESS = "state_located_address"
+        private const val STATE_LATITUDE = "state_latitude"
+        private const val STATE_LONGITUDE = "state_longitude"
     }
 }

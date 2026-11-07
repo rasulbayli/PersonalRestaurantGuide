@@ -15,20 +15,26 @@
         app:navigationContentDescription="@string/back"
         app:navigationIcon="@drawable/ic_arrow_back" />
 
-    <!-- TODO Milestone 3: Maps SDK + Fused Location replace this placeholder. -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
+        <FrameLayout
+            android:id="@+id/fullMapContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
         <LinearLayout
+            android:id="@+id/mapEmpty"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@color/map_placeholder"
             android:gravity="center"
             android:orientation="vertical"
             android:paddingStart="@dimen/spacing_lg"
-            android:paddingEnd="88dp">
+            android:paddingEnd="@dimen/spacing_lg"
+            android:visibility="gone">
 
             <ImageView
                 android:layout_width="@dimen/icon_lg"
@@ -38,43 +44,23 @@
                 android:tint="@color/text_secondary" />
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/spacing_sm"
-                android:gravity="center"
-                android:text="@string/map_coming_soon"
-                android:textAppearance="@style/TextAppearance.PRG.Title" />
-
-            <TextView
-                android:id="@+id/txtMapName"
+                android:id="@+id/txtMapEmpty"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/spacing_sm"
                 android:gravity="center"
                 android:textAppearance="@style/TextAppearance.PRG.Body" />
-
-            <TextView
-                android:id="@+id/txtMapAddress"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/spacing_xs"
-                android:gravity="center"
-                android:textAppearance="@style/TextAppearance.PRG.Caption" />
-
-            <TextView
-                android:id="@+id/txtZoomLevel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/spacing_md"
-                android:textAppearance="@style/TextAppearance.PRG.Caption" />
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/mapControls"
+            style="@style/Widget.PRG.MapControls"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end|center_vertical"
             android:layout_marginEnd="@dimen/spacing_md"
-            android:orientation="vertical">
+            android:divider="@drawable/map_control_space"
+            android:showDividers="middle">
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnZoomIn"
@@ -94,7 +80,6 @@
                 style="@style/Widget.PRG.Button"
                 android:layout_width="@dimen/zoom_button_size"
                 android:layout_height="@dimen/zoom_button_size"
-                android:layout_marginTop="@dimen/spacing_sm"
                 android:contentDescription="@string/zoom_out"
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
@@ -102,8 +87,40 @@
                 android:minHeight="@dimen/zoom_button_size"
                 android:padding="0dp"
                 android:text="@string/zoom_out_symbol" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnMyLocation"
+                style="@style/Widget.PRG.Button"
+                android:layout_width="@dimen/zoom_button_size"
+                android:layout_height="@dimen/zoom_button_size"
+                android:contentDescription="@string/my_location"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="@dimen/zoom_button_size"
+                android:minHeight="@dimen/zoom_button_size"
+                android:padding="0dp"
+                app:icon="@drawable/ic_my_location"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp" />
         </LinearLayout>
     </FrameLayout>
+
+    <TextView
+        android:id="@+id/txtMapName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/spacing_md"
+        android:layout_marginTop="@dimen/spacing_sm"
+        android:layout_marginEnd="@dimen/spacing_md"
+        android:textAppearance="@style/TextAppearance.PRG.Body" />
+
+    <TextView
+        android:id="@+id/txtMapAddress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/spacing_md"
+        android:layout_marginEnd="@dimen/spacing_md"
+        android:textAppearance="@style/TextAppearance.PRG.Caption" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnGetDirections"

@@ -1,89 +1,199 @@
 package ca.georgebrown3074.p66.personalrestaurantguide
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import ca.georgebrown3074.p66.personalrestaurantguide.data.AppDatabase
 import ca.georgebrown3074.p66.personalrestaurantguide.data.Restaurant
-import ca.georgebrown3074.p66.personalrestaurantguide.data.SampleData
+import ca.georgebrown3074.p66.personalrestaurantguide.ui.MapSupport
 import ca.georgebrown3074.p66.personalrestaurantguide.ui.RestaurantIntents
 import ca.georgebrown3074.p66.personalrestaurantguide.ui.applySystemBarInsets
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.SupportMapFragment
+import com.google.android.gms.maps.model.LatLng
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.launch
 
 class FullMapActivity : AppCompatActivity() {
 
-    private var restaurantId: Long = -1L
-    private var zoomLevel = 15
+    private var restaurant: Restaurant? = null
+    private var googleMap: GoogleMap? = null
+    private var shownPosition: LatLng? = null
+
+    // After a rotation the map fragment restores its own camera, so leave it where it is.
+    private var keepRestoredCamera = false
 
     private lateinit var toolbar: MaterialToolbar
+    private lateinit var emptyView: View
+    private lateinit var emptyText: TextView
+    private lateinit var controls: View
     private lateinit var nameText: TextView
     private lateinit var addressText: TextView
-    private lateinit var zoomText: TextView
+
+    private val locationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.values.any { it }) {
+            showMyLocation()
+        } else {
+            showMessage(R.string.location_permission_denied)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        restaurantId = intent.getLongExtra(Restaurant.EXTRA_RESTAURANT_ID, -1L)
-        if (restaurantId < 0L || SampleData.getById(restaurantId) == null) {
+        val restaurantId = intent.getLongExtra(Restaurant.EXTRA_RESTAURANT_ID, -1L)
+        if (restaurantId < 0L) {
             finish()
             return
         }
-        zoomLevel = savedInstanceState?.getInt(STATE_ZOOM, zoomLevel) ?: zoomLevel
+        keepRestoredCamera = savedInstanceState != null
 
         setContentView(R.layout.activity_full_map)
         findViewById<View>(R.id.mapRoot).applySystemBarInsets()
 
-        // TODO Milestone 3: Maps SDK + Fused Location
         toolbar = findViewById(R.id.toolbar)
+        emptyView = findViewById(R.id.mapEmpty)
+        emptyText = findViewById(R.id.txtMapEmpty)
+        controls = findViewById(R.id.mapControls)
         nameText = findViewById(R.id.txtMapName)
         addressText = findViewById(R.id.txtMapAddress)
-        zoomText = findViewById(R.id.txtZoomLevel)
 
         toolbar.setNavigationOnClickListener { finish() }
         findViewById<View>(R.id.btnZoomIn).setOnClickListener {
-            if (zoomLevel < MAX_ZOOM) zoomLevel += 1
-            showZoom()
+            googleMap?.animateCamera(CameraUpdateFactory.zoomIn())
         }
         findViewById<View>(R.id.btnZoomOut).setOnClickListener {
-            if (zoomLevel > MIN_ZOOM) zoomLevel -= 1
-            showZoom()
+            googleMap?.animateCamera(CameraUpdateFactory.zoomOut())
         }
+        findViewById<View>(R.id.btnMyLocation).setOnClickListener { onMyLocationClicked() }
         findViewById<View>(R.id.btnGetDirections).setOnClickListener {
-            val restaurant = SampleData.getById(restaurantId) ?: run {
-                finish()
-                return@setOnClickListener
+            restaurant?.let { RestaurantIntents.openDirections(this, it) }
+        }
+
+        if (MapSupport.isConfigured) attachMap()
+
+        val dao = AppDatabase.get(this).restaurantDao()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                dao.observeById(restaurantId).collect { saved ->
+                    if (saved == null) {
+                        finish()
+                    } else {
+                        restaurant = saved
+                        bind(saved)
+                    }
+                }
             }
-            RestaurantIntents.openDirections(this, restaurant)
         }
-        showZoom()
     }
 
-    override fun onResume() {
-        super.onResume()
-        val restaurant = SampleData.getById(restaurantId)
-        if (restaurant == null) {
-            finish()
-            return
+    private fun attachMap() {
+        val fragment = supportFragmentManager.findFragmentById(R.id.fullMapContainer)
+            as? SupportMapFragment
+            ?: SupportMapFragment.newInstance().also { created ->
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.fullMapContainer, created)
+                    .commit()
+            }
+        fragment.getMapAsync { map ->
+            googleMap = map
+            map.uiSettings.isMyLocationButtonEnabled = false
+            if (hasLocationPermission()) enableLocationLayer(map)
+            restaurant?.let { renderMap(it) }
         }
-        toolbar.title = restaurant.name
-        nameText.text = restaurant.name
-        addressText.text = restaurant.address
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putInt(STATE_ZOOM, zoomLevel)
+    private fun bind(saved: Restaurant) {
+        toolbar.title = saved.name
+        nameText.text = saved.name
+        addressText.text = saved.address
+
+        val position = MapSupport.positionOf(saved)
+        val canShowMap = MapSupport.isConfigured && position != null
+        emptyView.isVisible = !canShowMap
+        controls.isVisible = canShowMap
+        emptyText.setText(
+            if (MapSupport.isConfigured) R.string.map_no_location else R.string.map_no_api_key
+        )
+        renderMap(saved)
     }
 
-    private fun showZoom() {
-        zoomText.text = getString(R.string.zoom_level, zoomLevel)
+    private fun renderMap(saved: Restaurant) {
+        val map = googleMap ?: return
+        val position = MapSupport.positionOf(saved) ?: return
+        MapSupport.showMarker(map, saved, position)
+        if (position != shownPosition) {
+            if (!keepRestoredCamera) MapSupport.moveTo(map, position)
+            keepRestoredCamera = false
+            shownPosition = position
+        }
     }
 
-    companion object {
-        private const val STATE_ZOOM = "state_zoom"
-        private const val MIN_ZOOM = 1
-        private const val MAX_ZOOM = 21
+    private fun onMyLocationClicked() {
+        if (hasLocationPermission()) {
+            showMyLocation()
+        } else {
+            locationPermission.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        return listOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ).any { permission ->
+            ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    @SuppressLint("MissingPermission") // Only called after hasLocationPermission() is true.
+    private fun enableLocationLayer(map: GoogleMap) {
+        map.isMyLocationEnabled = true
+    }
+
+    @SuppressLint("MissingPermission") // Only called after hasLocationPermission() is true.
+    private fun showMyLocation() {
+        val map = googleMap ?: return
+        enableLocationLayer(map)
+        showMessage(R.string.finding_location)
+        LocationServices.getFusedLocationProviderClient(this)
+            .getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
+            .addOnSuccessListener(this) { location ->
+                if (location == null) {
+                    showMessage(R.string.location_off)
+                } else {
+                    map.animateCamera(
+                        CameraUpdateFactory.newLatLng(LatLng(location.latitude, location.longitude))
+                    )
+                }
+            }
+            .addOnFailureListener(this) { showMessage(R.string.location_off) }
+    }
+
+    private fun showMessage(message: Int) {
+        Snackbar.make(findViewById(R.id.mapRoot), message, Snackbar.LENGTH_LONG).show()
     }
 }

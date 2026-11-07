@@ -9,8 +9,12 @@ import android.widget.LinearLayout
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import ca.georgebrown3074.p66.personalrestaurantguide.data.AppDatabase
 import ca.georgebrown3074.p66.personalrestaurantguide.data.Restaurant
 import ca.georgebrown3074.p66.personalrestaurantguide.data.SampleData
 import ca.georgebrown3074.p66.personalrestaurantguide.ui.applySystemBarInsets
@@ -19,6 +23,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: RestaurantListAdapter
 
     private var selectedTag = ""
+    private var restaurants: List<Restaurant> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,12 +80,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<FloatingActionButton>(R.id.fabAdd).setOnClickListener {
             startActivity(Intent(this, AddEditRestaurantActivity::class.java))
         }
-    }
 
-    override fun onResume() {
-        super.onResume()
-        rebuildFilterChips()
-        showRestaurants()
+        val dao = AppDatabase.get(this).restaurantDao()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                dao.observeAll().collect { saved ->
+                    restaurants = saved
+                    rebuildFilterChips()
+                    showRestaurants()
+                }
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -93,7 +104,7 @@ class MainActivity : AppCompatActivity() {
         group.isSelectionRequired = false
         group.removeAllViews()
 
-        val tags = listOf(getString(R.string.tag_all)) + SampleData.allTags()
+        val tags = listOf(getString(R.string.tag_all)) + SampleData.allTags(restaurants)
         var chipToCheck: Chip? = null
         tags.forEach { tag ->
             val chip = layoutInflater.inflate(R.layout.view_filter_chip, group, false) as? Chip
@@ -123,7 +134,7 @@ class MainActivity : AppCompatActivity() {
     private fun showRestaurants() {
         val query = searchEdit.text?.toString()?.trim().orEmpty()
         val allLabel = getString(R.string.tag_all)
-        val filtered = SampleData.restaurants.filter { restaurant ->
+        val filtered = restaurants.filter { restaurant ->
             val matchesQuery = query.isEmpty() ||
                 restaurant.name.contains(query, ignoreCase = true) ||
                 restaurant.tags.any { tag -> tag.contains(query, ignoreCase = true) }
@@ -131,8 +142,7 @@ class MainActivity : AppCompatActivity() {
                 restaurant.tags.any { tag -> tag.equals(selectedTag, ignoreCase = true) }
             matchesQuery && matchesTag
         }
-        // Copies so DiffUtil can see later edits to the objects stored in SampleData.
-        adapter.submitList(filtered.map { it.copy() })
+        adapter.submitList(filtered)
         val isEmpty = filtered.isEmpty()
         recyclerView.isVisible = !isEmpty
         emptyState.isVisible = isEmpty

@@ -15,7 +15,8 @@ object SampleData {
         "Gluten-free"
     )
 
-    val restaurants: MutableList<Restaurant> = mutableListOf(
+    /** Added to the database the first time the app runs. */
+    val restaurants: List<Restaurant> = listOf(
         Restaurant(
             id = 1,
             name = "Pasta Nonna",
@@ -84,40 +85,8 @@ object SampleData {
         )
     )
 
-    private val extraTags = mutableListOf<String>()
-    private var nextId = 7L
-
-    fun getById(id: Long): Restaurant? = restaurants.find { it.id == id }
-
-    /** id 0 means "give this restaurant the next id". */
-    fun add(restaurant: Restaurant): Restaurant {
-        val stored = if (restaurant.id > 0L) {
-            if (restaurant.id >= nextId) nextId = restaurant.id + 1
-            restaurant
-        } else {
-            restaurant.copy(id = nextId++)
-        }
-        restaurants.add(stored)
-        return stored
-    }
-
-    fun update(restaurant: Restaurant): Boolean {
-        val index = restaurants.indexOfFirst { it.id == restaurant.id }
-        if (index < 0) return false
-        restaurants[index] = restaurant
-        return true
-    }
-
-    fun delete(id: Long): Boolean = restaurants.removeAll { it.id == id }
-
-    fun registerTag(tag: String) {
-        val clean = tag.trim()
-        if (clean.isEmpty()) return
-        if (allTags().any { it.equals(clean, ignoreCase = true) }) return
-        extraTags.add(clean)
-    }
-
-    fun allTags(): List<String> {
+    /** Default tags first, then any other tag in use, ignoring case and duplicates. */
+    fun allTags(restaurants: List<Restaurant>, extra: Collection<String> = emptyList()): List<String> {
         val seen = LinkedHashSet<String>()
         fun addTag(tag: String) {
             val clean = tag.trim()
@@ -125,8 +94,8 @@ object SampleData {
             if (seen.none { it.equals(clean, ignoreCase = true) }) seen.add(clean)
         }
         defaultTags.forEach(::addTag)
-        extraTags.forEach(::addTag)
         restaurants.forEach { restaurant -> restaurant.tags.forEach(::addTag) }
+        extra.forEach(::addTag)
         return seen.toList()
     }
 }
