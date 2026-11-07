@@ -23,9 +23,26 @@ class RestaurantListAdapter(
     }
 
     override fun onBindViewHolder(holder: RestaurantViewHolder, position: Int) {
+        bindCard(holder, position, full = true)
+    }
+
+    override fun onBindViewHolder(
+        holder: RestaurantViewHolder,
+        position: Int,
+        payloads: MutableList<Any>
+    ) {
+        if (payloads.isEmpty()) {
+            super.onBindViewHolder(holder, position, payloads)
+        } else {
+            // Coordinates can update in the background. The card does not show them.
+            bindCard(holder, position, full = false)
+        }
+    }
+
+    private fun bindCard(holder: RestaurantViewHolder, position: Int, full: Boolean) {
         val restaurant = getItem(position) ?: return
-        holder.bind(restaurant)
         holder.itemView.setOnClickListener { onRestaurantClick(restaurant) }
+        if (full) holder.bind(restaurant)
     }
 
     class RestaurantViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -36,15 +53,27 @@ class RestaurantListAdapter(
 
         fun bind(restaurant: Restaurant) {
             name.text = restaurant.name
-            rating.rating = restaurant.rating.coerceIn(0f, 5f)
+            val ratingValue = restaurant.rating.coerceIn(0f, 5f)
+            if (rating.rating != ratingValue) rating.rating = ratingValue
             address.text = restaurant.address
-            tags.removeAllViews()
+            syncTags(restaurant.tags)
+        }
+
+        /** Reuses chip views so scrolling does not inflate a new chip on every bind. */
+        private fun syncTags(labels: List<String>) {
+            while (tags.childCount > labels.size) {
+                tags.removeViewAt(tags.childCount - 1)
+            }
             val inflater = LayoutInflater.from(itemView.context)
-            restaurant.tags.forEach { tag ->
-                val chip = inflater.inflate(R.layout.view_tag_chip, tags, false) as? Chip
-                    ?: return@forEach
-                chip.text = tag
-                tags.addView(chip)
+            labels.forEachIndexed { index, label ->
+                val chip = if (index < tags.childCount) {
+                    tags.getChildAt(index) as? Chip
+                } else {
+                    (inflater.inflate(R.layout.view_tag_chip, tags, false) as? Chip)?.also {
+                        tags.addView(it)
+                    }
+                } ?: return@forEachIndexed
+                if (chip.text?.toString() != label) chip.text = label
             }
         }
     }
@@ -58,6 +87,16 @@ class RestaurantListAdapter(
             override fun areContentsTheSame(oldItem: Restaurant, newItem: Restaurant): Boolean {
                 return oldItem == newItem
             }
+
+            override fun getChangePayload(oldItem: Restaurant, newItem: Restaurant): Any? {
+                val sameCard = oldItem.name == newItem.name &&
+                    oldItem.address == newItem.address &&
+                    oldItem.rating == newItem.rating &&
+                    oldItem.tags == newItem.tags
+                return if (sameCard) PAYLOAD_SAME_CARD else null
+            }
         }
+
+        private val PAYLOAD_SAME_CARD = Any()
     }
 }

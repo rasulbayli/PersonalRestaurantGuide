@@ -27,6 +27,7 @@ import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class FullMapActivity : AppCompatActivity() {
@@ -34,6 +35,8 @@ class FullMapActivity : AppCompatActivity() {
     private var restaurant: Restaurant? = null
     private var googleMap: GoogleMap? = null
     private var shownPosition: LatLng? = null
+    private var renderedMarkerKey: String? = null
+    private var mapAttachStarted = false
 
     // After a rotation the map fragment restores its own camera, so leave it where it is.
     private var keepRestoredCamera = false
@@ -88,12 +91,14 @@ class FullMapActivity : AppCompatActivity() {
             restaurant?.let { RestaurantIntents.openDirections(this, it) }
         }
 
-        if (MapSupport.isConfigured) attachMap()
+        if (MapSupport.isConfigured) {
+            findViewById<View>(R.id.fullMapContainer).post { attachMap() }
+        }
 
         val dao = AppDatabase.get(this).restaurantDao()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                dao.observeById(restaurantId).collect { saved ->
+                dao.observeById(restaurantId).distinctUntilChanged().collect { saved ->
                     if (saved == null) {
                         finish()
                     } else {
@@ -105,7 +110,15 @@ class FullMapActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (MapSupport.isConfigured && !mapAttachStarted) {
+            findViewById<View>(R.id.fullMapContainer).post { attachMap() }
+        }
+    }
+
     private fun attachMap() {
+        if (mapAttachStarted || isDestroyed || supportFragmentManager.isStateSaved) return
         val fragment = supportFragmentManager.findFragmentById(R.id.fullMapContainer)
             as? SupportMapFragment
             ?: SupportMapFragment.newInstance().also { created ->
@@ -113,7 +126,9 @@ class FullMapActivity : AppCompatActivity() {
                     .replace(R.id.fullMapContainer, created)
                     .commit()
             }
+        mapAttachStarted = true
         fragment.getMapAsync { map ->
+            if (isDestroyed) return@getMapAsync
             googleMap = map
             map.uiSettings.isMyLocationButtonEnabled = false
             if (hasLocationPermission()) enableLocationLayer(map)
@@ -139,7 +154,11 @@ class FullMapActivity : AppCompatActivity() {
     private fun renderMap(saved: Restaurant) {
         val map = googleMap ?: return
         val position = MapSupport.positionOf(saved) ?: return
-        MapSupport.showMarker(map, saved, position)
+        val key = "${saved.id}|${position.latitude}|${position.longitude}|${saved.name}|${saved.address}"
+        if (key != renderedMarkerKey) {
+            MapSupport.showMarker(map, saved, position)
+            renderedMarkerKey = key
+        }
         if (position != shownPosition) {
             if (!keepRestoredCamera) MapSupport.moveTo(map, position)
             keepRestoredCamera = false

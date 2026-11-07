@@ -1,6 +1,7 @@
 package ca.georgebrown3074.p66.personalrestaurantguide
 
 import android.os.Bundle
+import android.telephony.PhoneNumberFormattingTextWatcher
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
@@ -26,6 +27,7 @@ import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 
 class AddEditRestaurantActivity : AppCompatActivity() {
@@ -90,6 +92,9 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         ratingBar = findViewById(R.id.ratingBar)
         verifyButton = findViewById(R.id.btnVerify)
         saveButton = findViewById(R.id.btnSave)
+        // Enabled state is driven by us. Restoring a disabled button after rotation leaves it stuck.
+        verifyButton.isSaveEnabled = false
+        saveButton.isSaveEnabled = false
 
         // Dynamic rows are restored by us, not by the view hierarchy (ids would collide).
         phoneContainer.setSaveFromParentEnabled(false)
@@ -179,12 +184,12 @@ class AddEditRestaurantActivity : AppCompatActivity() {
         locatedLongitude = longitude
     }
 
-    @Suppress("DEPRECATION") // Course spec: format as the user types. Country CA matches Toronto.
+    // Course spec: format as the user types. Country CA matches Toronto.
     private fun addPhoneField(number: String) {
         val row = layoutInflater.inflate(R.layout.item_phone_field, phoneContainer, false)
         row.setSaveFromParentEnabled(false)
         val edit = row.findViewById<TextInputEditText>(R.id.phoneEditText)
-        edit.addTextChangedListener(android.telephony.PhoneNumberFormattingTextWatcher("CA"))
+        edit.addTextChangedListener(CaPhoneFormatter())
         if (number.isNotEmpty()) edit.setText(number)
         row.findViewById<View>(R.id.btnRemovePhone).setOnClickListener {
             phoneContainer.removeView(row)
@@ -317,37 +322,54 @@ class AddEditRestaurantActivity : AppCompatActivity() {
 
         hideKeyboard()
         saveButton.isEnabled = false
+        val needsLookup = address != locatedAddress
+        val restaurant = Restaurant(
+            id = id ?: 0L,
+            name = name,
+            address = address,
+            latitude = if (needsLookup) null else locatedLatitude,
+            longitude = if (needsLookup) null else locatedLongitude,
+            phones = phones,
+            description = description,
+            tags = tags,
+            rating = rating
+        )
+        val appContext = applicationContext
         lifecycleScope.launch {
-            // Saving never depends on the network: an address that can't be located yet is
-            // stored without coordinates, and the details screen tries again later.
-            if (address != locatedAddress) {
-                locatedAddress = null
-                locatedLatitude = null
-                locatedLongitude = null
-                val result = AddressLookup.find(this@AddEditRestaurantActivity, address)
-                if (result is LookupResult.Found) {
-                    rememberLocation(address, result.latitude, result.longitude)
+            // Saving never depends on the network. Store the restaurant immediately, then fill
+            // in coordinates in the background. Waiting here used to freeze this screen.
+            try {
+                val savedId = if (id == null) {
+                    dao.insert(restaurant)
+                } else {
+                    dao.update(restaurant)
+                    id
                 }
+                if (needsLookup) {
+                    AppDatabase.runInBackground {
+                        try {
+                            val result = AddressLookup.find(appContext, address)
+                            val stillSame = dao.getById(savedId)?.address == address
+                            if (result is LookupResult.Found && stillSame) {
+                                dao.updateLocation(savedId, result.latitude, result.longitude)
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                Toast.makeText(
+                    this@AddEditRestaurantActivity,
+                    R.string.restaurant_saved,
+                    Toast.LENGTH_SHORT
+                ).show()
+                finish()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                saveButton.isEnabled = true
             }
-            val restaurant = Restaurant(
-                id = id ?: 0L,
-                name = name,
-                address = address,
-                latitude = locatedLatitude,
-                longitude = locatedLongitude,
-                phones = phones,
-                description = description,
-                tags = tags,
-                rating = rating
-            )
-            if (id == null) dao.insert(restaurant) else dao.update(restaurant)
-
-            Toast.makeText(
-                this@AddEditRestaurantActivity,
-                R.string.restaurant_saved,
-                Toast.LENGTH_SHORT
-            ).show()
-            finish()
         }
     }
 
@@ -369,6 +391,28 @@ class AddEditRestaurantActivity : AppCompatActivity() {
                 layout.error = null
             }
         })
+    }
+
+    /**
+     * Formats a Canadian number as it is typed, and refuses to format a value it just wrote.
+     * Without that stop, the platform watcher can keep replacing the text and freeze the screen.
+     */
+    private class CaPhoneFormatter : PhoneNumberFormattingTextWatcher("CA") {
+        private var updating = false
+        private var last = ""
+
+        override fun afterTextChanged(s: Editable?) {
+            if (updating || s == null) return
+            val current = s.toString()
+            if (current == last) return
+            updating = true
+            try {
+                super.afterTextChanged(s)
+                last = s.toString()
+            } finally {
+                updating = false
+            }
+        }
     }
 
     companion object {

@@ -10,7 +10,10 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import ca.georgebrown3074.p66.personalrestaurantguide.data.AppDatabase
+import ca.georgebrown3074.p66.personalrestaurantguide.ui.MapSupport
 import ca.georgebrown3074.p66.personalrestaurantguide.ui.applySystemBarInsets
+import com.google.android.gms.maps.MapsInitializer
 
 class SplashActivity : AppCompatActivity() {
 
@@ -31,6 +34,23 @@ class SplashActivity : AppCompatActivity() {
         setContentView(R.layout.activity_splash)
         findViewById<View>(R.id.splashRoot).applySystemBarInsets()
         handler.postDelayed(openHome, SPLASH_DELAY_MS)
+        // Open the database and Maps SDK during the splash so the first screen does not hitch.
+        // This outlives the splash activity, which closes itself after the delay.
+        val appContext = applicationContext
+        AppDatabase.runInBackground {
+            try {
+                AppDatabase.get(appContext).restaurantDao().getAll()
+            } catch (_: Exception) {
+            }
+            if (!MapSupport.isConfigured) return@runInBackground
+            try {
+                MapsInitializer.initialize(
+                    appContext,
+                    MapsInitializer.Renderer.LATEST
+                ) { _ -> }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onDestroy() {

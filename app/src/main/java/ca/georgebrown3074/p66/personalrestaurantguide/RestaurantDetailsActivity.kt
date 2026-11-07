@@ -29,14 +29,19 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class RestaurantDetailsActivity : AppCompatActivity() {
 
     private var restaurantId: Long = -1L
     private var restaurant: Restaurant? = null
+    private var bound: Restaurant? = null
     private var lastLookupAddress: String? = null
     private var previewMap: GoogleMap? = null
+    private var mapAttachStarted = false
+    private var renderedMarkerKey: String? = null
+    private var bindingRating = false
 
     private lateinit var dao: RestaurantDao
     private lateinit var toolbar: MaterialToolbar
@@ -92,9 +97,11 @@ class RestaurantDetailsActivity : AppCompatActivity() {
         }
 
         ratingBar.setOnRatingBarChangeListener { _, rating, fromUser ->
-            if (!fromUser) return@setOnRatingBarChangeListener
+            if (!fromUser || bindingRating) return@setOnRatingBarChangeListener
+            val chosen = rating.coerceIn(0f, 5f)
+            if (restaurant?.rating == chosen) return@setOnRatingBarChangeListener
             lifecycleScope.launch {
-                dao.updateRating(restaurantId, rating.coerceIn(0f, 5f))
+                dao.updateRating(restaurantId, chosen)
                 Toast.makeText(
                     this@RestaurantDetailsActivity,
                     R.string.rating_saved,
@@ -115,7 +122,7 @@ class RestaurantDetailsActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                dao.observeById(restaurantId).collect { saved ->
+                dao.observeById(restaurantId).distinctUntilChanged().collect { saved ->
                     if (saved == null) {
                         finish()
                     } else {
@@ -128,32 +135,66 @@ class RestaurantDetailsActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!mapAttachStarted && restaurant?.let { MapSupport.positionOf(it) } != null) {
+            mapContainer.post { attachPreviewMap() }
+        }
+    }
+
     private fun bind(restaurant: Restaurant) {
+        val previous = bound
         toolbar.title = restaurant.name
-        ratingBar.rating = restaurant.rating.coerceIn(0f, 5f)
-        addressText.text = restaurant.address
-        descriptionText.text = restaurant.description.ifBlank {
-            getString(R.string.no_description)
+        val ratingValue = restaurant.rating.coerceIn(0f, 5f)
+        if (ratingBar.rating != ratingValue) {
+            bindingRating = true
+            ratingBar.rating = ratingValue
+            bindingRating = false
         }
-
-        tagChipGroup.removeAllViews()
-        restaurant.tags.forEach { tag ->
-            val chip = layoutInflater.inflate(R.layout.view_tag_chip, tagChipGroup, false) as? Chip
-                ?: return@forEach
-            chip.text = tag
-            tagChipGroup.addView(chip)
+        if (previous?.address != restaurant.address) addressText.text = restaurant.address
+        if (previous?.description != restaurant.description) {
+            descriptionText.text = restaurant.description.ifBlank {
+                getString(R.string.no_description)
+            }
         }
-        noTags.isVisible = restaurant.tags.isEmpty()
-
-        phoneContainer.removeAllViews()
-        val phones = restaurant.phones.ifEmpty { listOf(getString(R.string.no_phone)) }
-        phones.forEach { phone ->
-            val row = layoutInflater.inflate(R.layout.item_phone_display, phoneContainer, false)
-            row.findViewById<TextView>(R.id.txtPhone).text = phone
-            phoneContainer.addView(row)
-        }
-
+        if (previous?.tags != restaurant.tags) showTags(restaurant.tags)
+        if (previous?.phones != restaurant.phones) showPhones(restaurant.phones)
         bindMapPreview(restaurant)
+        bound = restaurant
+    }
+
+    private fun showTags(tags: List<String>) {
+        while (tagChipGroup.childCount > tags.size) {
+            tagChipGroup.removeViewAt(tagChipGroup.childCount - 1)
+        }
+        tags.forEachIndexed { index, tag ->
+            val chip = if (index < tagChipGroup.childCount) {
+                tagChipGroup.getChildAt(index) as? Chip
+            } else {
+                (layoutInflater.inflate(R.layout.view_tag_chip, tagChipGroup, false) as? Chip)?.also {
+                    tagChipGroup.addView(it)
+                }
+            } ?: return@forEachIndexed
+            if (chip.text?.toString() != tag) chip.text = tag
+        }
+        noTags.isVisible = tags.isEmpty()
+    }
+
+    private fun showPhones(phones: List<String>) {
+        val labels = phones.ifEmpty { listOf(getString(R.string.no_phone)) }
+        while (phoneContainer.childCount > labels.size) {
+            phoneContainer.removeViewAt(phoneContainer.childCount - 1)
+        }
+        labels.forEachIndexed { index, phone ->
+            val row = if (index < phoneContainer.childCount) {
+                phoneContainer.getChildAt(index)
+            } else {
+                layoutInflater.inflate(R.layout.item_phone_display, phoneContainer, false).also {
+                    phoneContainer.addView(it)
+                }
+            }
+            row.findViewById<TextView>(R.id.txtPhone).text = phone
+        }
     }
 
     private fun bindMapPreview(restaurant: Restaurant) {
@@ -164,13 +205,17 @@ class RestaurantDetailsActivity : AppCompatActivity() {
         mapEmptyText.setText(
             if (MapSupport.isConfigured) R.string.map_no_location else R.string.map_no_api_key
         )
-        if (canShowMap) attachPreviewMap()
+        if (canShowMap && !mapAttachStarted) mapContainer.post { attachPreviewMap() }
         renderPreview()
     }
 
-    /** Created only once there is something to show, so the lite map gets its real size. */
+    /**
+     * Created only once there is something to show, so the lite map gets its real size.
+     * A second copy of the map (easy to start while the first transaction is still pending)
+     * freezes this screen.
+     */
     private fun attachPreviewMap() {
-        if (previewMap != null) return
+        if (mapAttachStarted || isDestroyed || supportFragmentManager.isStateSaved) return
         val fragment = supportFragmentManager.findFragmentById(R.id.mapPreviewContainer)
             as? SupportMapFragment
             ?: SupportMapFragment.newInstance(GoogleMapOptions().liteMode(true)).also { created ->
@@ -178,9 +223,12 @@ class RestaurantDetailsActivity : AppCompatActivity() {
                     .replace(R.id.mapPreviewContainer, created)
                     .commit()
             }
+        mapAttachStarted = true
         fragment.getMapAsync { map ->
+            if (isDestroyed) return@getMapAsync
             previewMap = map
             map.uiSettings.isMapToolbarEnabled = false
+            map.uiSettings.setAllGesturesEnabled(false)
             renderPreview()
         }
     }
@@ -189,6 +237,9 @@ class RestaurantDetailsActivity : AppCompatActivity() {
         val map = previewMap ?: return
         val saved = restaurant ?: return
         val position = MapSupport.positionOf(saved) ?: return
+        val key = "${saved.id}|${position.latitude}|${position.longitude}|${saved.name}|${saved.address}"
+        if (key == renderedMarkerKey) return
+        renderedMarkerKey = key
         MapSupport.showMarker(map, saved, position)
         MapSupport.moveTo(map, position)
     }

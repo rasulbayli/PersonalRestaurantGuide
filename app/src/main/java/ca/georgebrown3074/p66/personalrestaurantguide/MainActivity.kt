@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.SimpleItemAnimator
 import ca.georgebrown3074.p66.personalrestaurantguide.data.AppDatabase
 import ca.georgebrown3074.p66.personalrestaurantguide.data.Restaurant
 import ca.georgebrown3074.p66.personalrestaurantguide.data.SampleData
@@ -23,6 +24,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -57,6 +59,8 @@ class MainActivity : AppCompatActivity() {
 
         searchEdit = findViewById(R.id.searchEditText)
         filterChipGroup = findViewById(R.id.filterChipGroup)
+        // Rebuilt from the database, so the view hierarchy must not restore its own copy.
+        filterChipGroup.isSaveEnabled = false
         recyclerView = findViewById(R.id.restaurantRecyclerView)
         emptyState = findViewById(R.id.emptyState)
 
@@ -67,6 +71,9 @@ class MainActivity : AppCompatActivity() {
             )
         }
         recyclerView.layoutManager = LinearLayoutManager(this)
+        recyclerView.setHasFixedSize(true)
+        recyclerView.setItemViewCacheSize(12)
+        (recyclerView.itemAnimator as? SimpleItemAnimator)?.supportsChangeAnimations = false
         recyclerView.adapter = adapter
 
         searchEdit.addTextChangedListener(object : TextWatcher {
@@ -84,7 +91,7 @@ class MainActivity : AppCompatActivity() {
         val dao = AppDatabase.get(this).restaurantDao()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                dao.observeAll().collect { saved ->
+                dao.observeAll().distinctUntilChanged().collect { saved ->
                     restaurants = saved
                     rebuildFilterChips()
                     showRestaurants()
@@ -100,11 +107,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun rebuildFilterChips() {
         val group = filterChipGroup
+        val tags = listOf(getString(R.string.tag_all)) + SampleData.allTags(restaurants)
+        if (chipLabels(group) == tags) return
         group.setOnCheckedStateChangeListener(null)
         group.isSelectionRequired = false
         group.removeAllViews()
 
-        val tags = listOf(getString(R.string.tag_all)) + SampleData.allTags(restaurants)
         var chipToCheck: Chip? = null
         tags.forEach { tag ->
             val chip = layoutInflater.inflate(R.layout.view_filter_chip, group, false) as? Chip
@@ -128,6 +136,12 @@ class MainActivity : AppCompatActivity() {
             val chip = group.findViewById<Chip>(id) ?: return@setOnCheckedStateChangeListener
             selectedTag = chip.text?.toString().orEmpty()
             showRestaurants()
+        }
+    }
+
+    private fun chipLabels(group: ChipGroup): List<String> {
+        return List(group.childCount) { index ->
+            (group.getChildAt(index) as? Chip)?.text?.toString().orEmpty()
         }
     }
 

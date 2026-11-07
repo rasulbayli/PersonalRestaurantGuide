@@ -9,6 +9,10 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 
 /** Phones and tags are short string lists, so they are stored as JSON in one column. */
@@ -53,6 +57,13 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         @Volatile
         private var instance: AppDatabase? = null
+
+        private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** Work that must finish even if the screen that started it has already closed. */
+        fun runInBackground(block: suspend () -> Unit) {
+            applicationScope.launch { block() }
+        }
 
         fun get(context: Context): AppDatabase {
             return instance ?: synchronized(this) {
